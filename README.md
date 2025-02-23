@@ -1,4 +1,4 @@
-# gmmk_sleep
+# GMMK Sleep!
 Turn off the GMMK2 lights when your display turns off.
 
 My GMMK 2 keyboard would not turn off when my displays were off so I created this.
@@ -16,12 +16,12 @@ Make sure the VID and PID match yours in the settings.json file, update if not.
 
 **Run the .exe**
 
-If want to exit it, you can right click the tray icon.
+If you want to exit it, you can right click the tray icon.
 
 # How it works:
 It checks the display timeout from the current power plan and then checks if the system is IDLE for the same amount of time.
 If no screen timeout is set, it defaults to 15 minutes.
-It switches the profile to profile 2 if the system is IDLE for that long, switches back to profile 1 when the system stops being idle.
+It switches the profile to profile 2 if the system is IDLE for that long, switches back to profile 1 when the system stops being IDLE.
 
 # How to run locally:
 Clone this repo, add hidapi.dll from [HERE](https://github.com/libusb/hidapi/releases) to the root of the script.
