@@ -94,10 +94,10 @@ def is_system_active(timeout):
 def find_device_path():
     devices = hid.enumerate(VENDOR_ID, PRODUCT_ID)
     for device in devices:
-        print(
-            f"Found device: Interface={device.get('interface_number', -1)}, Usage Page={device.get('usage_page', 0):04x}")
         if (device['interface_number'] == INTERFACE and
                 device['usage_page'] == 0xFF01):
+            print(
+                f"Found device: Interface={device.get('interface_number', -1)}, Usage Page={device.get('usage_page', 0):04x}")
             return device['path']
     return None
 
@@ -113,23 +113,30 @@ def send_report(report):
                 break
 
     if not device_path:
-        raise Exception(f"Device with interface {INTERFACE} not found")
+        print(f"Warning: Device with interface {INTERFACE} not found - keyboard may be disconnected")
+        return False
 
     try:
         device = hid.Device(path=device_path)
         device.send_feature_report(bytes(report))
         print("Feature report sent successfully")
-
         device.close()
+        return True
 
     except Exception as e:
-        raise Exception(f"HID error: {e}")
+        print(f"Warning: Could not send report to device - {e}")
+        return False
 
 
 def main_loop():
     display_timeout = get_display_timeout()
     last_state = is_system_active(display_timeout)
+    device_connected = True
+    reconnect_attempts = 0
+    
     print(f"System state: {'ACTIVE' if last_state else 'IDLE'}")
+    find_device_path()
+    
     while not stop_event.is_set():
         current_state = is_system_active(display_timeout)
         print(f"System state: {'ACTIVE' if current_state else 'IDLE'}")
@@ -138,11 +145,38 @@ def main_loop():
             print("System activity changed, updating keyboard lighting...")
             report = [0x07, 0x01, 0x01, 0x01] if current_state else [0x07, 0x01, 0x02, 0x01]
             report += [0x00] * (REPORT_LENGTH - 4)
-            send_report(report)
-            last_state = current_state
-            print("Keyboard lighting updated successfully")
+            
+            success = send_report(report)
+            if success:
+                last_state = current_state
+                print("Keyboard lighting updated successfully")
+                device_connected = True
+                reconnect_attempts = 0
+            else:
+                if device_connected:
+                    print("Device disconnected - will retry when reconnected")
+                    device_connected = False
+                reconnect_attempts += 1
+                
+                # Try to reconnect less frequently after multiple failures
+                if reconnect_attempts > 10:
+                    time.sleep(5)  # Wait longer between reconnection attempts
         else:
             print("No change in system activity")
+            
+            # If device was disconnected, periodically try to reconnect
+            if not device_connected and reconnect_attempts % 5 == 0:
+                print("Attempting to reconnect to device...")
+                # Try sending current state to check if device is back
+                report = [0x07, 0x01, 0x01, 0x01] if current_state else [0x07, 0x01, 0x02, 0x01]
+                report += [0x00] * (REPORT_LENGTH - 4)
+                
+                if send_report(report):
+                    print("Device reconnected successfully!")
+                    device_connected = True
+                    reconnect_attempts = 0
+                    last_state = current_state
+                    
         time.sleep(2)
     sys.exit(0)
 
