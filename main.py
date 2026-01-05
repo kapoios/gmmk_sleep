@@ -83,11 +83,16 @@ def is_system_active(timeout):
 
     kernel32 = ctypes.windll.kernel32
     user32 = ctypes.windll.user32
+    
+    # Specify return type as unsigned 32-bit to handle values > 2^31 (after ~24.8 days uptime)
+    kernel32.GetTickCount.restype = ctypes.c_uint
 
     current_tick = kernel32.GetTickCount()
     user32.GetLastInputInfo(ctypes.byref(last_input))
     idle_time = current_tick - last_input.dwTime
-
+    
+    #print(f"Debug: idle_time={idle_time}ms, timeout={timeout}ms, idle_time < timeout = {idle_time < timeout}")
+    
     return idle_time < timeout
 
 
