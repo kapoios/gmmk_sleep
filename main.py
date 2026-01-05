@@ -8,6 +8,7 @@ import winreg
 
 import pystray
 from PIL import Image
+import settings_gui
 
 # Load the hidapi.dll from the project directory
 dll_path = os.path.join(os.path.dirname(__file__), "hidapi.dll")
@@ -38,9 +39,18 @@ def on_exit(icon):
     stop_event.set()
 
 
+def on_settings(icon):
+    """Open the settings GUI in a separate thread"""
+    settings_thread = threading.Thread(target=settings_gui.open_settings, daemon=True)
+    settings_thread.start()
+
+
 def create_tray_icon():
     icon_image = Image.open(os.path.join(os.path.dirname(__file__), "icon.png"))
-    menu = pystray.Menu(pystray.MenuItem("Exit", on_exit))
+    menu = pystray.Menu(
+        pystray.MenuItem("Settings", on_settings),
+        pystray.MenuItem("Exit", on_exit)
+    )
     icon = pystray.Icon("gmmk_sleep", icon_image, "GMMK Sleep!", menu=menu)
     icon.run()
 
