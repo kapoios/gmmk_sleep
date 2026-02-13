@@ -1,4 +1,5 @@
 import ctypes
+from ctypes import wintypes
 import json
 import os
 import re
@@ -6,11 +7,35 @@ import subprocess
 import sys
 import threading
 import time
-import winreg
 
 import pystray
 from PIL import Image
 import settings_gui
+
+# Define GUID structure for Power APIs
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+# GUID_VIDEO_SUBGROUP: {7516b95f-f776-4464-8c53-06167f40cc99}
+GUID_VIDEO_SUBGROUP = GUID(0x7516b95f, 0xf776, 0x4464, (ctypes.c_ubyte * 8)(0x8c, 0x53, 0x06, 0x16, 0x7f, 0x40, 0xcc, 0x99))
+# GUID_VIDEO_POWERDOWN_TIMEOUT: {3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e}
+GUID_VIDEO_POWERDOWN_TIMEOUT = GUID(0x3c0bc021, 0xc8a8, 0x4e07, (ctypes.c_ubyte * 8)(0xa9, 0x73, 0x6b, 0x14, 0xcb, 0xcb, 0x2b, 0x7e))
+
+# For Power Status
+class SYSTEM_POWER_STATUS(ctypes.Structure):
+    _fields_ = [
+        ('ACLineStatus', ctypes.c_byte),
+        ('BatteryFlag', ctypes.c_byte),
+        ('BatteryLifePercent', ctypes.c_byte),
+        ('Reserved1', ctypes.c_byte),
+        ('BatteryLifeTime', ctypes.c_uint32),
+        ('BatteryFullLifeTime', ctypes.c_uint32),
+    ]
 
 # Load the hidapi.dll from the project directory
 dll_path = os.path.join(os.path.dirname(__file__), "hidapi.dll")
@@ -58,48 +83,53 @@ def create_tray_icon():
 
 
 def get_display_timeout():
+    """Retrieve the display timeout (in seconds) using official Windows Power APIs."""
+    timeout = None
     try:
-        # Open the main power schemes key
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"System\CurrentControlSet\Control\Power\User\PowerSchemes") as power_key:
-            # Read the active power scheme GUID
-            active_scheme, _ = winreg.QueryValueEx(power_key, "ActivePowerScheme")
-
-        # Combine paths for the display timeout setting (AC)
-        subkey_path = (
-            f"System\\CurrentControlSet\\Control\\Power\\User\\PowerSchemes\\{active_scheme}\\"
-            "7516b95f-f776-4464-8c53-06167f40cc99\\3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"
-        )
-
-        # Read the ACSettingIndex as the display timeout (in seconds)
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey_path) as display_key:
-            ac_timeout, _ = winreg.QueryValueEx(display_key, "ACSettingIndex")
-    except Exception as e:
+        powrprof = ctypes.windll.powrprof
+        kernel32 = ctypes.windll.kernel32
+        
+        # Check power status
+        status = SYSTEM_POWER_STATUS()
+        kernel32.GetSystemPowerStatus(ctypes.byref(status))
+        on_ac = status.ACLineStatus != 0
+        
+        active_guid_ptr = ctypes.POINTER(GUID)()
+        if powrprof.PowerGetActiveScheme(None, ctypes.byref(active_guid_ptr)) == 0:
+            try:
+                timeout_val = wintypes.DWORD()
+                read_func = powrprof.PowerReadACValueIndex if on_ac else powrprof.PowerReadDCValueIndex
+                if read_func(None, active_guid_ptr, ctypes.byref(GUID_VIDEO_SUBGROUP),
+                           ctypes.byref(GUID_VIDEO_POWERDOWN_TIMEOUT), ctypes.byref(timeout_val)) == 0:
+                    timeout = timeout_val.value
+            finally:
+                kernel32.LocalFree(active_guid_ptr)
+    except Exception:
         print(f"Registry access failed ({e}), attempting powercfg fallback...")
         try:
-            # Fallback to powercfg using standard aliases for better compatibility
-            # SCHEME_CURRENT (Active), SUB_VIDEO (Display), VIDEOIDLE (Timeout)
+            # Fallback to powercfg
             cmd = "powercfg /query SCHEME_CURRENT SUB_VIDEO VIDEOIDLE"
-            result = subprocess.check_output(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW).decode()
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, 
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
             
-            for line in result.splitlines():
-                if "Current AC Power Setting Index" in line:
-                    timeout_hex = line.split(":")[-1].strip()
-                    ac_timeout = int(timeout_hex, 16)
-                    break
-            else:
-                ac_timeout = None
-        except Exception as e2:
-            print(f"Powercfg fallback also failed: {e2}")
-            ac_timeout = None
-
-    if ac_timeout is not None:
-        print("Display timeout: " + str(ac_timeout) + " seconds")
+            status = SYSTEM_POWER_STATUS()
+            ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status))
+            on_ac = status.ACLineStatus != 0
+            
+            matches = dict(re.findall(r"(AC|DC) Setting Index: (0x[0-9a-fA-F]+)", result.stdout))
+            val = matches.get("AC" if on_ac else "DC")
+            if val:
+                timeout = int(val, 16)
+        except Exception:
+            print(f"powercfg failed too...")
+            pass
+    if timeout is not None:
+        print("Display timeout: " + str(timeout) + " seconds")
     else:
         print("Display timeout not found, using 15 minutes as default")
-        ac_timeout = 15 * 60
+        timeout = 15 * 60
     # Convert seconds to milliseconds
-    return ac_timeout * 1000
+    return timeout * 1000
 
 
 def is_system_active(timeout):
