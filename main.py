@@ -1,6 +1,8 @@
 import ctypes
 import json
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -56,23 +58,42 @@ def create_tray_icon():
 
 
 def get_display_timeout():
-    # Open the main power schemes key
-    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                        r"System\CurrentControlSet\Control\Power\User\PowerSchemes") as power_key:
-        # Read the active power scheme GUID
-        active_scheme, _ = winreg.QueryValueEx(power_key, "ActivePowerScheme")
+    try:
+        # Open the main power schemes key
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"System\CurrentControlSet\Control\Power\User\PowerSchemes") as power_key:
+            # Read the active power scheme GUID
+            active_scheme, _ = winreg.QueryValueEx(power_key, "ActivePowerScheme")
 
-    # Combine paths for the display timeout setting (AC)
-    subkey_path = (
-        f"System\\CurrentControlSet\\Control\\Power\\User\\PowerSchemes\\{active_scheme}\\"
-        "7516b95f-f776-4464-8c53-06167f40cc99\\3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"
-    )
+        # Combine paths for the display timeout setting (AC)
+        subkey_path = (
+            f"System\\CurrentControlSet\\Control\\Power\\User\\PowerSchemes\\{active_scheme}\\"
+            "7516b95f-f776-4464-8c53-06167f40cc99\\3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"
+        )
 
-    # Read the ACSettingIndex as the display timeout (in seconds)
-    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey_path) as display_key:
-        ac_timeout, _ = winreg.QueryValueEx(display_key, "ACSettingIndex")
+        # Read the ACSettingIndex as the display timeout (in seconds)
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey_path) as display_key:
+            ac_timeout, _ = winreg.QueryValueEx(display_key, "ACSettingIndex")
+    except Exception as e:
+        print(f"Registry access failed ({e}), attempting powercfg fallback...")
+        try:
+            # Fallback to powercfg using standard aliases for better compatibility
+            # SCHEME_CURRENT (Active), SUB_VIDEO (Display), VIDEOIDLE (Timeout)
+            cmd = "powercfg /query SCHEME_CURRENT SUB_VIDEO VIDEOIDLE"
+            result = subprocess.check_output(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW).decode()
+            
+            for line in result.splitlines():
+                if "Current AC Power Setting Index" in line:
+                    timeout_hex = line.split(":")[-1].strip()
+                    ac_timeout = int(timeout_hex, 16)
+                    break
+            else:
+                ac_timeout = None
+        except Exception as e2:
+            print(f"Powercfg fallback also failed: {e2}")
+            ac_timeout = None
 
-    if ac_timeout:
+    if ac_timeout is not None:
         print("Display timeout: " + str(ac_timeout) + " seconds")
     else:
         print("Display timeout not found, using 15 minutes as default")
